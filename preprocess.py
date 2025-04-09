@@ -17,11 +17,11 @@ class PreprocessPPG:
 
         if vis:
             hp.plotter(wd, m)
-            plt.xlim(0, (wd['hr'].shape[0] / wd['sample_rate']) / 10)
-            plt.show()
-            plt.close() # <-- Брейкпоинт ставить сюда
+            # for measure in m.keys(): print('%s: %f' %(measure, m[measure]))
 
-            for measure in m.keys(): print('%s: %f' %(measure, m[measure]))
+            plt.xlim(0, (wd['hr'].shape[0] / wd['sample_rate']) / 10)
+            # plt.show()
+            plt.close() # <-- Брейкпоинт ставить сюда
 
         return m
 
@@ -74,7 +74,7 @@ class PreprocessPPG:
                 plt.plot(ppg_cycle)
                 for m in [systolic_main, systolic_refl, dichrotic]:
                     plt.plot(m, ppg_cycle[m], 'ro')
-                plt.show()
+                # plt.show()
                 plt.close() # <-- Брейкпоинт ставить сюда
 
             dists = pd.concat([dists,
@@ -113,7 +113,7 @@ class PreprocessPPG:
 
             # АХТУНГ -- это временный и пока НЕ завершённый вариант выходных данных!
             # В частности, вместо breathingrate будет возвращаться уже посчитанный RSA,
-            # а также будут значения соотношения HF/LF на основе вейвлет анализа Вани.
+            # а также будут значения соотношения LF/HF на основе вейвлет-анализа Вани.
             seg_results = {
                 'd1_mean': seg_dists['d1'],
                 'd2_mean': seg_dists['d2'],
@@ -129,6 +129,13 @@ class PreprocessPPG:
                 'breathingrate': seg_hp['breathingrate']
             }
 
+            if vis:
+                plt.plot(seg)
+                plt.text(0, 0, str(seg_results).replace(', ', '\n '), fontsize=9,
+                          horizontalalignment='left', verticalalignment='bottom')
+                plt.savefig(f'seg_{i}.png')
+                plt.close() # <-- Брейкпоинт ставить сюда
+
             # Добавляем запись в DataFrame
             results = pd.concat([results,
                 pd.DataFrame([seg_results])
@@ -137,7 +144,7 @@ class PreprocessPPG:
         return results
 
 
-# Пример использования!
+# # Пример использования на данных MAUS
 # fpath = __file__.split('/preprocess.py')[0] + '/maus_006_ppg_pixart_resting.csv'
 # df = pd.read_csv(fpath)
 # p = PreprocessPPG()
@@ -149,18 +156,37 @@ class PreprocessPPG:
 #     high = highcut / nyquist
 #     b, a = butter(order, [low, high], btype='band')
 #     return b, a
-
 # b, a = butter_bandpass(0.5, 10, 100)
 # ppg_filtered = filtfilt(b, a, df["Resting"].to_numpy())
 
-# # vis=True должно быть ТОЛЬКО ПРИ ОТЛАДКЕ, иначе всё просто повиснет нахрен!!!
 # res1 = p.process_data(ppg_filtered, 100, 10, 5)
 # res2 = p.process_data(ppg_filtered, 100, 20, 1)
 # res3 = p.process_data(ppg_filtered, 100, 10, 10)
 # res4 = p.process_data(ppg_filtered, 100, 50, 5)
-
 # for res in [res1, res2, res3, res4]:
-#     print(res, '\n')
+#     print(res, '\n') # ПКМ --> Открыть в первичном обработчике данных
+
+
+# Пример использования на самопальных данных из Ардуинки
+fpath = __file__.split('/preprocess.py')[0] + '/../250409-Н-315-120.txt'
+ppg = []
+with open(fpath, 'r') as f:
+    for line in f:
+        ppg.append(float(line.strip()))
+
+# Создаём и применяем полосовой фильтр
+def butter_bandpass(lowcut, highcut, fs, order=4):
+    nyquist = 0.5 * fs
+    low = lowcut / nyquist
+    high = highcut / nyquist
+    b, a = butter(order, [low, high], btype='band')
+    return b, a
+b, a = butter_bandpass(0.5, 10, 100)
+ppg_filtered = filtfilt(b, a, ppg)[160:6000]
+
+p = PreprocessPPG()
+res = p.process_data(ppg_filtered, 120, 10, 1, vis=True) # vis=True исп-ся для отладки!!!
+print(res) # ПКМ --> Открыть в первичном обработчике данных
 
 
 __all__ = ["PreprocessPPG"]
