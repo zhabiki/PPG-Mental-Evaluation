@@ -1,8 +1,10 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
+
 import heartpy as hp
-from scipy.signal import find_peaks
+from scipy.interpolate import interp1d
+from scipy.signal import find_peaks, stft
 
 from filtering import Filtering
 filtering = Filtering()
@@ -23,7 +25,7 @@ class PreprocessPPG:
 
         diastolic, _ = find_peaks(ppg * -1, distance=fs * 0.5, height=np.percentile(ppg * -1, 40))
         systolic = []
-        
+
         # Не забываем (как я) учитывать смещение между началом данных и первым найденным пиком
         start_offset = diastolic[0]
 
@@ -77,16 +79,15 @@ class PreprocessPPG:
                     systolic_main,
                     dichrotic - systolic_main,
                     systolic_refl - dichrotic,
-                    len(ppg_cycle) - systolic_refl,
-                    0, 0 # <-- Временные значения IBI и RRI
+                    len(ppg_cycle) - systolic_refl
                 ]], columns=dists.columns)
             ], ignore_index=True)
 
         return dists, start_offset
-        
-    
+
+
     def find_rri_ibi(self, ppg, fs, vis=[]):
-        """Вычисление IB- и RR-интервалов. Возвращает как сами интервалы, так и их точки на сигнале."""
+        """Вычисление IB- и RR-интервалов и их точек расположения на сигнале."""
         ppg_filtered = filtering.butter_bandpass(ppg, fs, 0.5, 10.0)
 
         r_peaks, _ = find_peaks(
@@ -100,13 +101,13 @@ class PreprocessPPG:
             height=np.percentile(ppg_filtered * -1, 40)
         )
 
-        if 'ir' in vis:
+        if 'peaks' in vis:
             plt.figure(figsize=[20, 12])
             plt.plot(ppg_filtered)
             plt.plot(r_peaks, ppg_filtered[r_peaks], 'ro')
             plt.plot(d_peaks, ppg_filtered[d_peaks], 'go')
             plt.xlim(0, fs * 100)
-            plt.savefig('ir.png')
+            plt.savefig('peaks.png')
             plt.close() # <-- Брейкпоинт ставить сюда
 
         rri = np.diff(r_peaks / fs)
@@ -127,12 +128,21 @@ class PreprocessPPG:
         return m
 
 
-    def find_lf_hf(self, rri, ppg, fs, vis=[]):
+    def find_lf_hf(self, rri, ppg, fs_ppg, fs_interp=4.0, vis=[]):
         """
         Вычисление параметров LF, HF и их соотношения.\n
-        Развёрнутое объяснение алгоритма см. в "PPG-Datasets-Exploration/Анализ_данных.ipynb"
+        Развёрнутое объяснение алгоритма см. в "PPG-Datasets-Exploration/Анализ_данных_new.ipynb"
         """
-        raise NotImplementedError
+
+        rri_cum = np.cumsum(rri)
+        rri_cum = np.insert(rri_cum, 0, 0.0)[:-1]
+
+        # Итерполируем на равномерную временнУю ось (в мануале -- 4 Гц)
+        interp_times = np.arange(0, rri_cum[-1], 1/fs_interp)
+        f = interp1d(rri_cum, rri, kind='cubic', fill_value='extrapolate')
+        interp_rri = f(interp_times)
+
+        # TODO: ...
 
 
     def find_rsa(self, ppg, fs, vis=[]):
@@ -143,7 +153,7 @@ class PreprocessPPG:
     def process_data(self, ppg, fs, wsize, wstride, vis=[]):
         """
         Полная обработка данных ФПГ с использованием скользящего по пикам(!) окна.
-        
+
         :param ppg: Временнóе представление данных ФПГ (алгоритм не выполняет никакой фильтрации
         сигнала самостоятельно, поэтому желательно предварительно сделать это самостоятельно).
 
@@ -164,13 +174,13 @@ class PreprocessPPG:
         # задаются и применяются окном от и до диастолических пиков:
         ppg_rp, ppg_rri, ppg_dp, ppg_ibi = self.find_rri_ibi(ppg, fs, vis)
 
-        # Теперь проходим по сигналу скользящим по началам сердечных циклов
-        # окном размером wsize с зазором в wstride сердечных циклов:
+        # Теперь проходим по сигналу скользящим по началам сердечных
+        # циклов окном размером в wsize с.ц. с зазором в wstride с.ц.:
         params = pd.DataFrame(columns=[])
 
         for i in range(0, len(ppg_dp) - wsize, wstride):
             seg = ppg[ppg_dp[i] : ppg_dp[i+wsize]]
-            print(f'Окно №{i}: {ppg_dp[i]}--{ppg_dp[i+wsize]} (Р: {len(seg)}, Ш: {ppg_dp[i] - ppg_dp[i-1]})')
+            print(f'Окно №{i}: {ppg_dp[i]}—{ppg_dp[i+wsize]} (Р: {len(seg)}, Ш: {ppg_dp[i] - ppg_dp[i-1]})')
 
             seg_hrv = self.find_hrv(seg, fs, vis)
             # seg_dists = heartcycle_dists.iloc[i : i+wsize].mean() # На текущий момент больше не используется!
@@ -190,7 +200,6 @@ class PreprocessPPG:
                 # 'd3_mean': seg_dists['d3'],
                 # 'd4_mean': seg_dists['d4'],
 
-                # TODO:
                 # 'lf': seg_lf_hf['lf'],
                 # 'hf': seg_lf_hf['hf'],
                 # 'lf/hf': seg_lf_hf['lf/hf'],
@@ -235,20 +244,25 @@ class PreprocessPPG:
 #     print(res, '\n') # ПКМ --> Открыть в первичном обработчике данных
 
 
-# # Пример использования на самопальных данных из Ардуинки
-# fs = 120
-# ppg = []
-# fpath = __file__.split('/preprocess.py')[0] + '/examples/250409-Н-315-120.txt'
-# with open(fpath, 'r') as f:
-#     for line in f:
-#         ppg.append(float(line.strip()))
+# Пример использования на самопальных данных из Ардуинки
+fs = 120
+ppg = []
+fpath = __file__.split('/preprocess.py')[0] + '/examples/250409-Н-315-120.txt'
+with open(fpath, 'r') as f:
+    for line in f:
+        ppg.append(float(line.strip()))
 
-# ppg_filtered = filtering.butter_bandpass(ppg[100:-100], fs)
-# p = PreprocessPPG()
-# res = p.process_data(ppg_filtered, fs, 70, 1, vis=[
-#     # 'ir', 'hrv', 'seg'
-# ]) # Доступные параметры: ['dists', 'ir', 'hrv', 'lh', 'rsa', 'seg']
-# print(res['param']) # ПКМ --> Открыть в первичном обработчике данных
+ppg_filtered = filtering.butter_bandpass(ppg[100:-100], fs)
+p = PreprocessPPG()
+res = p.process_data(ppg_filtered, fs, 70, 1, vis=[
+    'dists',
+    'peaks',
+    'hrv',
+    'lf_hf',
+    'rsa',
+    # 'seg'
+])
+print(res['param']) # ПКМ --> Открыть в первичном обработчике данных
 
 
 __all__ = ["PreprocessPPG"]
