@@ -1,9 +1,13 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 
-from scipy.signal import butter, filtfilt, find_peaks
 import heartpy as hp
+from scipy.interpolate import interp1d
+from scipy.signal import find_peaks, stft
+
+from filtering import Filtering
+filtering = Filtering()
 
 
 # from preprocess import PreprocessPPG
@@ -11,19 +15,20 @@ class PreprocessPPG:
     def __init__(self):
         pass
 
-    def find_heartcycle_dists(self, ppg, fs, vis=False):
+    def find_heartcycle_dists(self, ppg, fs, vis=[]):
         """
         Нахождение расстояний между шагами сердечного цикла.\n
         Развёрнутое описание алгоритма см. в "PPG-Datasets-Exploration/MAUS.ipynb"
         """
 
-        dists = pd.DataFrame(columns=['d1', 'd2', 'd3', 'd4', 'RR', 'IB'])
+        dists = pd.DataFrame(columns=['d1', 'd2', 'd3', 'd4'])
+
         diastolic, _ = find_peaks(ppg * -1, distance=fs * 0.5, height=np.percentile(ppg * -1, 40))
-        
+        systolic = []
+
         # Не забываем (как я) учитывать смещение между началом данных и первым найденным пиком
         start_offset = diastolic[0]
 
-        systolic_peaks = []
         for i in range(len(diastolic)-1):
             ppg_cycle = ppg[diastolic[i] : diastolic[i+1]]
 
@@ -60,65 +65,95 @@ class PreprocessPPG:
             else:
                 dichrotic = notch_range.start + np.argmin(ppg_cycle[notch_range])
 
-            if vis:
+            if 'dists' in vis:
                 plt.plot(ppg_cycle)
                 for m in [systolic_main, systolic_refl, dichrotic]:
                     plt.plot(m, ppg_cycle[m], 'ro')
-                # plt.show()
+                plt.savefig('dists.png')
                 plt.close() # <-- Брейкпоинт ставить сюда
 
-            systolic_peaks.append(diastolic[i] + systolic_main)
+            systolic.append(diastolic[i] + systolic_main)
 
             dists = pd.concat([dists,
                 pd.DataFrame([[
                     systolic_main,
                     dichrotic - systolic_main,
                     systolic_refl - dichrotic,
-                    len(ppg_cycle) - systolic_refl,
-                    0, 0 # <-- Временные значения IBI и RRI
+                    len(ppg_cycle) - systolic_refl
                 ]], columns=dists.columns)
             ], ignore_index=True)
 
-        # RR-интервал -- расстояние между систолическими пиками
-        rri = np.diff(systolic_peaks)
-        dists.loc[:len(rri)-1, 'RR'] = rri
-
-        # IB-интервал -- расстояние между диастолическими пиками
-        ibi = np.diff(diastolic)
-        dists.loc[:len(ibi)-1, 'IB'] = ibi
-
         return dists, start_offset
-        
-    
-    def find_hrv(self, ppg, fs, vis=False):
+
+
+    def find_rri_ibi(self, ppg, fs, vis=[]):
+        """Вычисление IB- и RR-интервалов и их точек расположения на сигнале."""
+        ppg_filtered = filtering.butter_bandpass(ppg, fs, 0.5, 10.0)
+
+        r_peaks, _ = find_peaks(
+            ppg_filtered,
+            distance=fs * 0.5, 
+            height=np.percentile(ppg_filtered, 40)
+        )
+        d_peaks, _ = find_peaks(
+            ppg_filtered * -1,
+            distance=fs * 0.5,
+            height=np.percentile(ppg_filtered * -1, 40)
+        )
+
+        if 'peaks' in vis:
+            plt.figure(figsize=[20, 12])
+            plt.plot(ppg_filtered)
+            plt.plot(r_peaks, ppg_filtered[r_peaks], 'ro')
+            plt.plot(d_peaks, ppg_filtered[d_peaks], 'go')
+            plt.xlim(0, fs * 100)
+            plt.savefig('peaks.png')
+            plt.close() # <-- Брейкпоинт ставить сюда
+
+        rri = np.diff(r_peaks / fs)
+        ibi = np.diff(d_peaks / fs)
+        return r_peaks, rri, d_peaks, ibi
+
+
+    def find_hrv(self, ppg, fs, vis=[]):
         """Вычисление параметров ВСР с использованием HeartPy."""
-        wd, m = hp.process(ppg, sample_rate=fs)
+        wd, m = hp.process(np.array(ppg), sample_rate=fs)
 
-        if vis:
+        if 'hrv' in vis:
             hp.plotter(wd, m)
-            # for measure in m.keys(): print('%s: %f' %(measure, m[measure]))
-
-            plt.xlim(0, (wd['hr'].shape[0] / wd['sample_rate']) / 10)
-            # plt.show()
+            # plt.xlim(0, (wd['hr'].shape[0] / wd['sample_rate']) / 10)
+            plt.savefig('hrv.png')
             plt.close() # <-- Брейкпоинт ставить сюда
 
         return m
 
-    def find_lf_hf(self, rr, ppg, fs, vis=False):
+
+    def find_lf_hf(self, rri, ppg, fs_ppg, fs_interp=4.0, vis=[]):
         """
         Вычисление параметров LF, HF и их соотношения.\n
-        Развёрнутое объяснение алгоритма см. в "PPG-Datasets-Exploration/Анализ_данных.ipynb"
+        Развёрнутое объяснение алгоритма см. в "PPG-Datasets-Exploration/Анализ_данных_new.ipynb"
         """
-        raise NotImplementedError
 
-    def find_rsa(self, ppg, fs, vis=False):
+        rri_cum = np.cumsum(rri)
+        rri_cum = np.insert(rri_cum, 0, 0.0)[:-1]
+
+        # Итерполируем на равномерную временнУю ось (в мануале -- 4 Гц)
+        interp_times = np.arange(0, rri_cum[-1], 1/fs_interp)
+        f = interp1d(rri_cum, rri, kind='cubic', fill_value='extrapolate')
+        interp_rri = f(interp_times)
+
+        # TODO: ...
+
+
+    def find_rsa(self, ppg, fs, vis=[]):
         """Вычисление параметра RSA на основе соотношения LF/HF."""
         raise NotImplementedError
 
-    def process_data(self, ppg, fs, wsize, wstride, vis=False):
+
+    def process_data(self, ppg, fs, wsize, wstride, vis=[]):
         """
         Полная обработка данных ФПГ с использованием скользящего по пикам(!) окна.
-        
+
         :param ppg: Временнóе представление данных ФПГ (алгоритм не выполняет никакой фильтрации
         сигнала самостоятельно, поэтому желательно предварительно сделать это самостоятельно).
 
@@ -128,46 +163,31 @@ class PreprocessPPG:
 
         :param wstride: Шаг окна — задаётся не в мс, а в количестве сердечных циклов от впадины до впадины.
 
-        :param vis: Вывод и сохранение визуализации данных в процессе обработки. Использовать только для отладки!
+        :param vis: Список названий методов, для которых, по ходу обработки, нужно визуализировать данные
+        и затем сохранить эти визуализации. Сильно замедляет работу, использовать только для отладки!
 
-        :return results: Датафрейм Pandas, для каждого пройденного окна содержащий средние значения
-        расстояний шагов сердечного цикла, параметры ВСР, LF, HF и их соотношение, и RSA.
+        :return results: Объект, содержащий датафрейм `params`, содержащий параметры ВСР, LF, HF и их
+        соотношение, и RSA, для каждого окна, а также `rri` и `ibi` — полные данные RR- и IB-интервалов.
         """
 
         # Сперва находим расстояния для всего сигнала, поскольку окна
-        # задаются и применяются от и до диастолических пиков сердечных циклов:
-        heartcycle_dists, start_offset = self.find_heartcycle_dists(ppg, fs, vis)
+        # задаются и применяются окном от и до диастолических пиков:
+        ppg_rp, ppg_rri, ppg_dp, ppg_ibi = self.find_rri_ibi(ppg, fs, vis)
 
-        if len(heartcycle_dists) < wsize+2:
-            raise ValueError("Слишком большое окно, во всём датасете пиков меньше!")
+        # Теперь проходим по сигналу скользящим по началам сердечных
+        # циклов окном размером в wsize с.ц. с зазором в wstride с.ц.:
+        params = pd.DataFrame(columns=[])
 
-        # Теперь из расстояний предвычислим мести диастолических пиков отн. сигнала;
-        # при этом не забываем (как я) учитывать стартовое смещение данных расстояний!
-        offsets = [start_offset]
-        for i in range(heartcycle_dists.shape[0]):
-            offsets.append(offsets[-1] + round(heartcycle_dists.iloc[i]['IB']))
-
-        # Наконец, проходим по сигналу скользящим по пикам окном с зазором в N пиков
-        results = pd.DataFrame(columns=[])
-
-        for i in range(0, len(offsets) - wsize, wstride):
-            seg = ppg[offsets[i] : offsets[i+wsize]]
-            print(f'Окно №{i}: {offsets[i]}--{offsets[i+wsize]} (Р: {len(seg)}, Ш: {offsets[i] - offsets[i-1]})')
+        for i in range(0, len(ppg_dp) - wsize, wstride):
+            seg = ppg[ppg_dp[i] : ppg_dp[i+wsize]]
+            print(f'Окно №{i}: {ppg_dp[i]}—{ppg_dp[i+wsize]} (Р: {len(seg)}, Ш: {ppg_dp[i] - ppg_dp[i-1]})')
 
             seg_hrv = self.find_hrv(seg, fs, vis)
-            seg_dists = heartcycle_dists.iloc[i : i+wsize].mean()
-            # TODO:
-            # seg_lf_hf = self.find_lf_hf(ppg, seg_dists['RR'] fs, vis)
+            # seg_dists = heartcycle_dists.iloc[i : i+wsize].mean() # На текущий момент больше не используется!
+            # seg_lf_hf = self.find_lf_hf(ppg, ppg_rri, fs, vis)
             # seg_rsa = self.find_rsa(seg_lf_hf['lf/hf'], fs, vis)
 
-            seg_results = {
-                'd1_mean': seg_dists['d1'],
-                'd2_mean': seg_dists['d2'],
-                'd3_mean': seg_dists['d3'],
-                'd4_mean': seg_dists['d4'],
-                'RR_mean': seg_dists['RR'],
-                'IB_mean': seg_dists['IB'],
-
+            seg_params = {
                 'bpm': seg_hrv['bpm'],
                 'sdnn': seg_hrv['sdnn'],
                 'sdsd': seg_hrv['sdsd'],
@@ -175,47 +195,46 @@ class PreprocessPPG:
                 'hr_mad': seg_hrv['hr_mad'],
                 'sd1/sd2': seg_hrv['sd1/sd2'],
 
-                # TODO:
+                # 'd1_mean': seg_dists['d1'],
+                # 'd2_mean': seg_dists['d2'],
+                # 'd3_mean': seg_dists['d3'],
+                # 'd4_mean': seg_dists['d4'],
+
                 # 'lf': seg_lf_hf['lf'],
                 # 'hf': seg_lf_hf['hf'],
                 # 'lf/hf': seg_lf_hf['lf/hf'],
                 # 'rsa': seg_rsa
             }
 
-            if vis:
+            if 'seg' in vis:
                 plt.figure(figsize=(12, 8))
                 plt.subplot(211)
                 plt.plot(seg)
                 plt.subplot(212)
-                plt.text(0, 0, str(seg_results)[1:-1].replace(', ', ' \n'), fontsize=16,
+                plt.text(0, 0, str(seg_params)[1:-1].replace(', ', ' \n'), fontsize=16,
                          bbox=dict(facecolor='orange', alpha=0.2, edgecolor='orange'),
                          horizontalalignment='left', verticalalignment='bottom')
                 plt.tight_layout()
-                # plt.show()
                 plt.savefig(f'seg_{i}.png')
                 plt.close() # <-- Брейкпоинт ставить сюда
 
             # Добавляем запись в DataFrame
-            results = pd.concat([results,
-                pd.DataFrame([seg_results])
+            params = pd.concat([params,
+                pd.DataFrame([seg_params])
             ], ignore_index=True)
 
-        return results
+        return {
+            'param': params, 
+            'rri': ppg_rri,
+            'ibi': ppg_ibi
+        }
 
 
 # # Пример использования на данных MAUS
 # fpath = __file__.split('/preprocess.py')[0] + '/examples/maus_006_ppg_pixart_resting.csv'
 # df = pd.read_csv(fpath)
+# ppg_filtered = filtering.butter_bandpass(df["Resting"].to_numpy(), fs)
 # p = PreprocessPPG()
-
-# def butter_bandpass(lowcut, highcut, fs, order=4):
-#     nyquist = 0.5 * fs
-#     low = lowcut / nyquist
-#     high = highcut / nyquist
-#     b, a = butter(order, [low, high], btype='band')
-#     return b, a
-# b, a = butter_bandpass(0.5, 10, 100)
-# ppg_filtered = filtfilt(b, a, df["Resting"].to_numpy())
 
 # res1 = p.process_data(ppg_filtered, 100, 10, 5)
 # res2 = p.process_data(ppg_filtered, 100, 20, 1)
@@ -226,25 +245,24 @@ class PreprocessPPG:
 
 
 # Пример использования на самопальных данных из Ардуинки
-# fpath = __file__.split('/preprocess.py')[0] + '/examples/250409-Н-315-120.txt'
-# fs = 120
-# ppg = []
-# with open(fpath, 'r') as f:
-#     for line in f:
-#         ppg.append(float(line.strip()))
+fs = 120
+ppg = []
+fpath = __file__.split('/preprocess.py')[0] + '/examples/250409-Н-315-120.txt'
+with open(fpath, 'r') as f:
+    for line in f:
+        ppg.append(float(line.strip()))
 
-# def butter_bandpass(lowcut, highcut, fs, order=4):
-#     nyquist = 0.5 * fs
-#     low = lowcut / nyquist
-#     high = highcut / nyquist
-#     b, a = butter(order, [low, high], btype='band')
-#     return b, a
-# b, a = butter_bandpass(0.5, 10, fs)
-# ppg_filtered = filtfilt(b, a, ppg)#[160:6000]
-
-# p = PreprocessPPG()
-# res = p.process_data(ppg_filtered, fs, 70, 1, vis=True) # vis=True для отладки!!!
-# print(res) # ПКМ --> Открыть в первичном обработчике данных
+ppg_filtered = filtering.butter_bandpass(ppg[100:-100], fs)
+p = PreprocessPPG()
+res = p.process_data(ppg_filtered, fs, 70, 1, vis=[
+    'dists',
+    'peaks',
+    'hrv',
+    'lf_hf',
+    'rsa',
+    # 'seg'
+])
+print(res['param']) # ПКМ --> Открыть в первичном обработчике данных
 
 
 __all__ = ["PreprocessPPG"]

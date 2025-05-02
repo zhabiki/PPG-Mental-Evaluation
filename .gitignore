@@ -1,0 +1,12 @@
+# Кэш Питухона
+__pycache__/
+*.pyc
+
+# Отладочные артефакты препроцессора
+dists.png
+peaks.png
+hrv.png
+lf_hf.png
+rsa.png
+seg_*.png
+seg.png
