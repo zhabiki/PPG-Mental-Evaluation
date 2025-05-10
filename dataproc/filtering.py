@@ -45,7 +45,10 @@ class Filtering:
 
 
     def wavelet_cwt_hlf(self, signal, fs, wavelet, pph=300, f_min=0.01, f_max=1.00):
-        # Создание частотной оси
+        """
+        Вычисление LF и HF на основе вейвлет-преобразования данного сигнала с указанным вейвлетом.
+        """
+
         num_freqs = int((f_max - f_min) * pph)
         freqs = np.linspace(f_min, f_max, num=num_freqs)
 
@@ -54,12 +57,12 @@ class Filtering:
         scales = central_freq * fs / freqs
 
         cwt_coefs, cwt_freqs = pywt.cwt(
-            signal, scales, wavelet, sampling_period=(1/fs)
+            signal, scales, wavelet, sampling_period=(1 / fs)
         )
-        cwt_power = np.abs(cwt_coefs)
+        cwt_ampls = np.abs(cwt_coefs)
 
-        max_time = np.argmax(cwt_power, axis=1)
-        max_vals = cwt_power[np.arange(len(cwt_power)), max_time]
+        max_time = np.argmax(cwt_ampls, axis=1)
+        max_vals = cwt_ampls[np.arange(len(cwt_ampls)), max_time]
 
         # Исследуем частоты в областях расположения LF и HF,
         # сохраняем индексы максимумов амплитуды в этих областях
@@ -84,7 +87,38 @@ class Filtering:
         return {
             'lf': [lf_max_ampl, lf_max_freq, lf_max_time],
             'hf': [hf_max_ampl, hf_max_freq, hf_max_time],
-            'data': [cwt_freqs, cwt_power]
+            'data': [cwt_ampls, cwt_freqs]
         }
+
+
+    def fft_cwt_hlf(self, signal, fs):
+        """
+        Вычисление LF и HF на основе комплексного преобразования Фурье данного сигнала.
+        """
+
+        signal_fft = np.fft.fft(signal)
+        signal_freqs = np.fft.fftfreq(len(signal), d=(1 / fs))
+        signal_ampls = np.abs(signal_fft)
+
+        pozitiv = signal_freqs > 0
+        signal_freqs = signal_freqs[pozitiv]
+        signal_ampls = signal_ampls[pozitiv]
+
+        # Исследуем частоты в областях расположения LF и HF,
+        # сохраняем индексы максимумов амплитуды в этих областях
+        lf_roi = (signal_freqs > 0.04) & (signal_freqs <= 0.15)
+        lf_max_ampl = np.max(signal_ampls[lf_roi])
+        lf_max_freq = signal_freqs[lf_roi][np.argmax(signal_ampls[lf_roi])]
+
+        hf_roi = (signal_freqs > 0.15) & (signal_freqs <= 0.40)
+        hf_max_ampl = np.max(signal_ampls[hf_roi])
+        hf_max_freq = signal_freqs[hf_roi][np.argmax(signal_ampls[hf_roi])]
+
+        return {
+            'lf': [lf_max_ampl, lf_max_freq],
+            'hf': [hf_max_ampl, hf_max_freq],
+            'data': [signal_ampls, signal_freqs]
+        }
+
 
 __all__ = ["Filtering"]
