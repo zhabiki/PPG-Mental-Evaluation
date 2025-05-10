@@ -17,7 +17,9 @@ class PreprocessPPG:
         :param vis: Список названий методов, для которых, по ходу обработки, нужно визуализировать данные
         и затем сохранить эти визуализации. Сильно замедляет работу, использовать только для отладки!
         """
+
         self.vis = vis
+
 
     def find_heartcycle_dists(self, ppg, fs):
         """
@@ -90,26 +92,45 @@ class PreprocessPPG:
         return dists, start_offset
 
 
-    def find_rri_ibi(self, ppg, fs):
-        """Вычисление IB- и RR-интервалов и их точек расположения на сигнале."""
-        ppg_filtered = filtering.butter_bandpass(ppg, fs, 0.5, 10.0)
+    def find_rri_ibi(self, ppg, fs, method, filter_order=4):
+        """
+        Вычисление IB- и RR-интервалов и их раположения на сигнале различными методами —
+        `method='clear'` подходит для чистого сигнала ФПГ с минимальными зашумениями, а
+        `method='noisy'` — если сигнал шумный и `clear` оказался слишком чувствительным.
+        """
 
-        r_peaks, _ = find_peaks(
-            ppg_filtered,
-            distance=fs * 0.5, 
-            height=np.percentile(ppg_filtered, 40)
-        )
-        d_peaks, _ = find_peaks(
-            ppg_filtered * -1,
-            distance=fs * 0.5,
-            height=np.percentile(ppg_filtered * -1, 40)
-        )
+        if method == 'clear':
+            ppg_filtered = filtering.butter_bandpass(ppg, fs, 0.5, 10.0, filter_order)
+
+            r_peaks, _ = find_peaks(
+                ppg_filtered,
+                distance=fs * 0.5, 
+                height=np.percentile(ppg_filtered, 40)
+            )
+            d_peaks, _ = find_peaks(
+                ppg_filtered * -1,
+                distance=fs * 0.5,
+                height=np.percentile(ppg_filtered * -1, 40)
+            )
+
+        elif method == 'noisy':
+            wd, m = hp.process(np.array(ppg), sample_rate=fs)
+            print(wd, m)
+
+            r_peaks = wd['peaklist']
+
+            # TODO: Найти, где HP находит диастолические пики, и добавить их сюда!!!
+            d_peaks = wd['peaklist']
+
+        else:
+            print('Неизвестный тип обработки! См. документацию к методу…')
+            return
 
         if 'peaks' in self.vis:
-            plt.figure(figsize=[20, 12])
-            plt.plot(ppg_filtered)
-            plt.plot(r_peaks, ppg_filtered[r_peaks], 'ro')
-            plt.plot(d_peaks, ppg_filtered[d_peaks], 'go')
+            plt.figure(figsize=[24, 12])
+            plt.plot(ppg)
+            plt.plot(r_peaks, ppg[r_peaks], 'ro')
+            plt.plot(d_peaks, ppg[d_peaks], 'go')
             plt.xlim(0, fs * 100)
             plt.savefig('peaks.png')
             plt.close() # <-- Брейкпоинт ставить сюда
@@ -145,7 +166,7 @@ class PreprocessPPG:
         # таким образом получаем равномерное распределение с шагом 0.25 сек.
         # Графическое представление см. в "PPG-Datasets-Exploration/
         # Анализ данных как работает.png", иллюстрации 1 (до) и 2 (после).
-        interp_times = np.arange(0, rri_cum[-1], 1/interp_fs)
+        interp_times = np.arange(0, rri_cum[-1], (1 / interp_fs))
         f = interp1d(rri_cum, rri, kind='cubic', fill_value='extrapolate')
         interp_rri = f(interp_times)
 
@@ -186,7 +207,7 @@ class PreprocessPPG:
             plt.plot(rri, label=f'Сырые RR-интервалы: {len(rri)}')
             plt.plot(interp_rri, label=f'RRI с интерполяцией: {len(interp_rri)}')
             plt.plot(interp_rri_detrended, label='RRI с интерп. и детрендом')
-            plt.plot(interp_rri_approx, label='Выравн. по прибл. коэф.')
+            plt.plot(interp_rri_approx, label='Выравн. по прибл. коэф-ам')
             plt.legend()
             plt.subplot(212)
             plt.plot(interp_times[int(interp_fs*5):],
@@ -197,26 +218,24 @@ class PreprocessPPG:
             plt.savefig('lhf_plt.png')
             plt.close()
 
-        # Наконец, выполняем комплексное преобразование Фурье, используя
-        # вейвлет Морле, оттуда находим максиумы в областях частот LF и HF.
-        cwt_res = filtering.wavelet_cwt_hlf(
-            interp_rri_approx, interp_fs, 'cmor1.5-1.0', pph, 0.01, 1.00
-        )
+        # Наконец, для сигнала выполняем комплексное преобразование Фурье
+        # анализируем области частот LF и HF и оттуда находим их максимумы.
+        cwt_res = filtering.fft_cwt_hlf(interp_rri_approx, interp_fs)
 
         if 'lhf_cwt' in self.vis:
-            plt.figure(figsize=(8, 6))
-            t = np.arange(len(interp_rri_approx)) / interp_fs
-            plt.pcolormesh(t, cwt_res['data'][0], cwt_res['data'][1], shading='gouraud', cmap='plasma')
-            plt.ylim(0.01, 1.00)
-            plt.colorbar(label='Амплитуда')
-            [plt.axhline(y=y, color='cyan', linestyle='--') for y in [0.04, 0.15, 0.40]]
-            plt.axhline(y=cwt_res['lf'][1], color='yellow', linewidth=0.8)
-            plt.axvline(x=cwt_res['lf'][2], color='yellow', linewidth=0.8)
-            plt.axhline(y=cwt_res['hf'][1], color='tomato', linewidth=0.8)
-            plt.axvline(x=cwt_res['hf'][2], color='tomato', linewidth=0.8)
-            plt.text(10, 0.9, f'Макс. LF: {cwt_res["lf"][0]} @ {cwt_res["lf"][1]} Гц', c='yellow')
-            plt.text(10, 0.8, f'Макс. HF: {cwt_res["hf"][0]} @ {cwt_res["hf"][1]} Гц', c='tomato')
-            plt.tight_layout()
+            plt.figure(figsize=(12, 8))
+            plt.plot(cwt_res['data'][1], cwt_res['data'][0])
+            plt.xlim(0.0, 0.5)
+            plt.ylim(-1, 9)
+            [plt.axvline(x=xi, color='cyan', linestyle='--') for xi in [0.04, 0.15, 0.40]]
+            plt.axhline(y=cwt_res['lf'][0], color='yellow', linewidth=0.8)
+            plt.axvline(x=cwt_res['lf'][1], color='yellow', linewidth=0.8)
+            plt.axhline(y=cwt_res['hf'][0], color='tomato', linewidth=0.8)
+            plt.axvline(x=cwt_res['hf'][1], color='tomato', linewidth=0.8)
+            plt.text(0.25, 4, f'Макс. LF: {cwt_res["lf"][0]} @ {cwt_res["lf"][1]} Гц', c='yellow')
+            plt.text(0.25, 3, f'Макс. HF: {cwt_res["hf"][0]} @ {cwt_res["hf"][1]} Гц', c='tomato')
+            plt.xlabel("Частота")
+            plt.ylabel("Амплитуда")
             plt.savefig('lhf_cwt.png')
             plt.close()
 
@@ -239,7 +258,7 @@ class PreprocessPPG:
         return rsa
 
 
-    def process_data(self, ppg, fs, wsize, wstride):
+    def process_data(self, ppg, fs, wsize, wstride, method='clear'):
         """
         Полная обработка данных ФПГ с использованием скользящего по пикам(!) окна.
 
@@ -248,17 +267,19 @@ class PreprocessPPG:
 
         :param fs: Частота дискретизации данных ФПГ.
 
-        :param wsize: Размер окна — задаётся не в мс, а в количестве сердечных циклов от впадины до впадины.
+        :param wsize: Размер окна — задаётся в количестве сердечных циклов от впадины до впадины.
 
-        :param wstride: Шаг окна — задаётся не в мс, а в количестве сердечных циклов от впадины до впадины.
+        :param wstride: Шаг окна — задаётся в количестве сердечных циклов от впадины до впадины.
 
-        :return results: Объект, содержащий датафрейм `params`, содержащий параметры ВСР, LF, HF и их
-        соотношение, и RSA, для каждого окна, а также `rri` и `ibi` — полные данные RR- и IB-интервалов.
+        :return results: Датафрейм `params`, содержащий, для каждого окна, некоторые параметры ВСР,
+        усреднённые по окну IB- и RR-интервалы, LF, HF и их соотношение, а также значение RSA.
         """
 
         # Сперва находим расстояния для всего сигнала, поскольку окна
-        # задаются и применяются окном от и до диастолических пиков:
-        ppg_rp, ppg_rri, ppg_dp, ppg_ibi = self.find_rri_ibi(ppg, fs)
+        # задаются и применяются от и до диастолических пиков (aka IBI).
+        # Почему именно диастолических? Потому что так графики красивше!
+        # Если брать по систолическим (RRI) ничего особо не изменится.
+        ppg_rp, ppg_rri, ppg_dp, ppg_ibi = self.find_rri_ibi(ppg, fs, method, 4)
 
         # Теперь проходим по сигналу скользящим по началам сердечных
         # циклов окном размером в wsize с.ц. с зазором в wstride с.ц.:
@@ -266,16 +287,21 @@ class PreprocessPPG:
 
         for i in range(0, len(ppg_dp) - wsize, wstride):
             seg = ppg[ppg_dp[i] : ppg_dp[i+wsize]]
-            print(f'Окно №{i}: {ppg_dp[i]}—{ppg_dp[i+wsize]} (Р: {len(seg)}, Ш: {ppg_dp[i] - ppg_dp[i-1]})')
-
-            # seg_dists = heartcycle_dists.iloc[i : i+wsize].mean()
+            print(f'Окно №{i}: {ppg_dp[i]}—{ppg_dp[i+wsize]} (≈ {int((ppg_dp[i+wsize] - ppg_dp[i]) / fs)} сек.)')
+            print(f'Размер окна: {len(seg)}, Размер шага: {ppg_dp[i] - ppg_dp[i-1]}')
 
             seg_hrv = self.find_hrv(seg, fs)
-
             seg_rri = ppg_rri[i : i+wsize]
-            seg_lf_hf = self.find_lf_hf(seg_rri)
+            seg_ibi = ppg_ibi[i : i+wsize]
 
-            seg_rsa = self.find_rsa(seg, fs, seg_lf_hf['lf'], seg_lf_hf['hf'])
+            # Для корректного определения LF нужна длина минимум 5 минут,
+            # на окнах меньшего размера результат не будет иметь смысла.
+            if ((ppg_dp[i+wsize] - ppg_dp[i]) / fs) >= 300.0:
+                seg_lf_hf = self.find_lf_hf(seg_rri)
+                seg_rsa = self.find_rsa(seg, fs, seg_lf_hf['lf'], seg_lf_hf['hf'])
+            else:
+                seg_lf_hf = { 'lf': None, 'hf': None, 'lf/hf': None }
+                seg_rsa = None
 
             seg_params = {
                 'bpm': seg_hrv['bpm'],
@@ -284,28 +310,27 @@ class PreprocessPPG:
                 'rmssd': seg_hrv['rmssd'],
                 'hr_mad': seg_hrv['hr_mad'],
                 'sd1/sd2': seg_hrv['sd1/sd2'],
-
-                # 'd1_mean': seg_dists['d1'],
-                # 'd2_mean': seg_dists['d2'],
-                # 'd3_mean': seg_dists['d3'],
-                # 'd4_mean': seg_dists['d4'],
-
+                'rri_mean': np.mean(seg_rri, axis=0),
+                'ibi_mean': np.mean(seg_ibi, axis=0),
                 'lf': seg_lf_hf['lf'],
                 'hf': seg_lf_hf['hf'],
                 'lf/hf': seg_lf_hf['lf/hf'],
                 'rsa': seg_rsa
             }
 
-            if 'seg' in self.vis:
+            if 'seg' in self.vis or 'seg_i' in self.vis:
                 plt.figure(figsize=(12, 8))
                 plt.subplot(211)
                 plt.plot(seg)
                 plt.subplot(212)
-                plt.text(0, 0, str(seg_params)[1:-1].replace(', ', ' \n'), fontsize=16,
+                plt.text(0, 0, str(seg_params)[1:-1].replace(', ', '\n'), fontsize=16,
                          bbox=dict(facecolor='orange', alpha=0.2, edgecolor='orange'),
                          horizontalalignment='left', verticalalignment='bottom')
                 plt.tight_layout()
-                plt.savefig(f'seg_{i}.png')
+                if 'seg_i' in self.vis:
+                    plt.savefig(f'seg_{i}.png')
+                else:
+                    plt.savefig('seg.png')
                 plt.close() # <-- Брейкпоинт ставить сюда
 
             # Добавляем запись в DataFrame
@@ -313,48 +338,81 @@ class PreprocessPPG:
                 pd.DataFrame([seg_params])
             ], ignore_index=True)
 
-        return {
-            'param': params, 
-            'rri': ppg_rri,
-            'ibi': ppg_ibi
-        }
+        return params
 
 
-# # Пример использования на данных MAUS
+# # Пример использования на данных из датасета MAUS
 # fs = 100
 # fpath = __file__.split('/preprocess.py')[0] + '/examples/maus_006_ppg_pixart_resting.csv'
 # df = pd.read_csv(fpath)
 # ppg_filtered = filtering.butter_bandpass(df["Resting"].to_numpy(), fs)
-# p = PreprocessPPG()
 
-# res1 = p.process_data(ppg_filtered, fs, 10*fs, 1)
-# res2 = p.process_data(ppg_filtered, fs, 20*fs, 10)
-# res3 = p.process_data(ppg_filtered, fs, 10*fs, 10)
-# res4 = p.process_data(ppg_filtered, fs, 50*fs, 5)
+# p = PreprocessPPG(vis=[
+#     'dists',
+#     'peaks',
+#     # 'hrv',
+#     # 'lhf_plt',
+#     # 'lhf_cwt',
+#     # 'rsa',
+#     'seg',
+#     # 'seg_i'
+# ])
+
+# res1 = p.process_data(ppg_filtered, fs, 440, 1)
+# res2 = p.process_data(ppg_filtered, fs, 44, 1)
+# res3 = p.process_data(ppg_filtered, fs, 220, 10)
+# res4 = p.process_data(ppg_filtered, fs, 22, 22)
 # for res in [res1, res2, res3, res4]:
 #     print(res, '\n') # ПКМ --> Открыть в первичном обработчике данных
 
 
-# Пример использования на самопальных данных из Ардуинки
-fs = 120
-ppg = []
-fpath = __file__.split('/preprocess.py')[0] + '/examples/250409-Н-315-120.txt'
-with open(fpath, 'r') as f:
-    for line in f:
-        ppg.append(float(line.strip()))
+# # Пример использования на чистых данных с пальца
+# fs = 120
+# ppg = []
+# fpath = __file__.split('/preprocess.py')[0] + '/examples/250409-Н-315-120.txt'
+# with open(fpath, 'r') as f:
+#     for line in f:
+#         ppg.append(float(line.strip()))
 
-ppg_filtered = filtering.butter_bandpass(ppg[128:-88], fs)
-p = PreprocessPPG(vis=[
-    # 'dists',
-    # 'peaks',
-    # 'hrv',
-    'lhf_plt',
-    'lhf_cwt',
-    # 'rsa',
-    # 'seg'
-])
-res = p.process_data(ppg_filtered, fs, 400, 1)
-print(res['param']) # ПКМ --> Открыть в первичном обработчике данных
+# ppg_filtered = filtering.butter_bandpass(ppg, fs)
+# p = PreprocessPPG(vis=[
+#     'dists',
+#     'peaks',
+#     'hrv',
+#     'lhf_plt',
+#     'lhf_cwt',
+#     'rsa',
+#     'seg',
+#     # 'seg_i'
+# ])
+
+# res = p.process_data(ppg_filtered, fs, 400, 1, 'clear')
+# print(res) # ПКМ --> Открыть в первичном обработчике данных
 
 
-__all__ = ["PreprocessPPG"]
+# # Пример использования на шумных данных с запястья
+# fs = 250
+# # fs = 240
+# fpath = __file__.split('/preprocess.py')[0] + '/examples/01_exp02_anxiety.csv'
+# df = pd.read_csv(fpath)
+# ppg = df["afe_LED1ABSVAL"].to_numpy()
+# ppg_filtered = filtering.butter_bandpass(ppg[2000:], fs, 0.5, 4.0, 4)
+# # ppg_filtered = filtering.butter_bandpass(ppg[2000:], fs, 4.0, 9.0, 3)
+# ppg_filtered += np.abs(ppg_filtered.min())
+
+# p = PreprocessPPG(vis=[
+#     'dists',
+#     'peaks',
+#     'hrv',
+#     'lhf_plt',
+#     'lhf_cwt',
+#     # 'rsa',
+#     'seg',
+#     # 'seg_i'
+# ])
+
+# res = p.process_data(ppg_filtered, fs, 800, 1, 'noisy')
+# print(res) # ПКМ --> Открыть в первичном обработчике данных
+
+
+# __all__ = ["PreprocessPPG"]
