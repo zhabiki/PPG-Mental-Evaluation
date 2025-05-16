@@ -5,8 +5,9 @@ __pycache__/
 # Отладочные артефакты препроцессора
 dists.png
 peaks.png
+outliers.png
 hrv.png
-lh_plt.png
-lh_cwt.png
+lhf_plot.png
+lhf_comp.png
 rsa.png
-seg_*.png
+seg*.png

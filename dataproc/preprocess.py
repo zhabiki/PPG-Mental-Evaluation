@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 import heartpy as hp
 from scipy.interpolate import interp1d
-from scipy.signal import find_peaks
+from scipy.signal import find_peaks, savgol_filter
 
 from filtering import Filtering
 filtering = Filtering()
@@ -18,7 +18,7 @@ class PreprocessPPG:
         и затем сохранить эти визуализации. Сильно замедляет работу, использовать только для отладки!
         """
 
-        self.vis = vis
+        self.vis = set(vis)
 
 
     def find_heartcycle_dists(self, ppg, fs):
@@ -115,10 +115,8 @@ class PreprocessPPG:
 
         elif method == 'noisy':
             wd, m = hp.process(np.array(ppg), sample_rate=fs)
-            print(wd, m)
 
             r_peaks = wd['peaklist']
-
             # TODO: Найти, где HP находит диастолические пики, и добавить их сюда!!!
             d_peaks = wd['peaklist']
 
@@ -135,8 +133,8 @@ class PreprocessPPG:
             plt.savefig('peaks.png')
             plt.close() # <-- Брейкпоинт ставить сюда
 
-        rri = np.diff(r_peaks / fs)
-        ibi = np.diff(d_peaks / fs)
+        rri = np.diff(np.asarray(r_peaks) / fs)
+        ibi = np.diff(np.asarray(d_peaks) / fs)
         return r_peaks, rri, d_peaks, ibi
 
 
@@ -201,7 +199,7 @@ class PreprocessPPG:
 
         bias_mean = np.mean(interp_rri[int(interp_fs*5):])
 
-        if 'lhf_plt' in self.vis:
+        if 'lhf_plot' in self.vis:
             plt.figure(figsize=(12, 8))
             plt.subplot(211)
             plt.plot(rri, label=f'Сырые RR-интервалы: {len(rri)}')
@@ -215,28 +213,29 @@ class PreprocessPPG:
             plt.plot(interp_times[int(interp_fs*5):int(interp_fs*60*5)],
                      bias_mean + interp_rri_approx[int(interp_fs*5):int(interp_fs*60*5)])
             plt.tight_layout()
-            plt.savefig('lhf_plt.png')
+            plt.savefig('lhf_plot.png')
             plt.close()
 
         # Наконец, для сигнала выполняем комплексное преобразование Фурье
         # анализируем области частот LF и HF и оттуда находим их максимумы.
-        cwt_res = filtering.fft_cwt_hlf(interp_rri_approx, interp_fs)
+        cwt_res = filtering.hlf_fft_cwt(interp_rri_approx, interp_fs)
 
-        if 'lhf_cwt' in self.vis:
+        if 'lhf_comp' in self.vis:
             plt.figure(figsize=(12, 8))
             plt.plot(cwt_res['data'][1], cwt_res['data'][0])
             plt.xlim(0.0, 0.5)
-            plt.ylim(-1, 9)
             [plt.axvline(x=xi, color='cyan', linestyle='--') for xi in [0.04, 0.15, 0.40]]
             plt.axhline(y=cwt_res['lf'][0], color='yellow', linewidth=0.8)
             plt.axvline(x=cwt_res['lf'][1], color='yellow', linewidth=0.8)
             plt.axhline(y=cwt_res['hf'][0], color='tomato', linewidth=0.8)
             plt.axvline(x=cwt_res['hf'][1], color='tomato', linewidth=0.8)
-            plt.text(0.25, 4, f'Макс. LF: {cwt_res["lf"][0]} @ {cwt_res["lf"][1]} Гц', c='yellow')
-            plt.text(0.25, 3, f'Макс. HF: {cwt_res["hf"][0]} @ {cwt_res["hf"][1]} Гц', c='tomato')
+            plt.text(0.25, cwt_res['data'][0].max() * 0.6,
+                     f'Макс. LF: {cwt_res["lf"][0]} @ {cwt_res["lf"][1]} Гц', c='yellow')
+            plt.text(0.25, cwt_res['data'][0].max() * 0.5,
+                     f'Макс. HF: {cwt_res["hf"][0]} @ {cwt_res["hf"][1]} Гц', c='tomato')
             plt.xlabel("Частота")
             plt.ylabel("Амплитуда")
-            plt.savefig('lhf_cwt.png')
+            plt.savefig('lhf_comp.png')
             plt.close()
 
         return {
@@ -256,6 +255,63 @@ class PreprocessPPG:
         # НО!!! Это ОЧЕНЬ(!) приближённое вычисление, предназначенное для ЭКГ. Его необходимо
         # заменить более точной формулой, желательно с использованием breathing_rate из HeartPy.
         return rsa
+    
+
+    def remove_outliers(self, ppg, fs, peaks_pos, peaks_int, sigma_amp, sigma_int):
+        """Нахождение и удаление аутлаеров, а также подозрительно длинных или коротких пиков."""
+        clean_ppg = ppg.copy()
+        outliers = set()
+        MAD = 1.4826 # https://real-statistics.com/descriptive-statistics/mad-and-outliers/
+
+        # Применяем правило трёх сигм для нахождения аномальных амплитуд
+        amp_median = np.median(ppg[peaks_pos])
+        amp_mad = MAD * np.median(np.abs(ppg[peaks_pos] - amp_median))
+
+        amp_outliers = np.where(
+            np.abs(ppg[peaks_pos] - amp_median) > (amp_mad * sigma_amp)
+        )[0]
+
+        for idx in amp_outliers:
+            w_start = peaks_pos[idx-1] if idx > 0 else 0
+            w_end = peaks_pos[idx+1] if idx < len(peaks_pos)-1 else len(ppg)-1
+            outliers.add((w_start, w_end, 'amp'))
+
+        # Аналогично поступаем для нахождения аномальных интервалов
+        int_median = np.median(peaks_int)
+        int_mad = MAD * np.median(np.abs(peaks_int - int_median))
+
+        int_outliers = np.where(
+            np.abs(peaks_int - int_median) > (int_mad * sigma_int)
+        )[0]
+
+        for idx in int_outliers:
+            w_start = peaks_pos[idx-1] if idx > 0 else 0
+            w_end = peaks_pos[idx+1] if idx < len(peaks_pos)-1 else len(ppg)-1
+            outliers.add((w_start, w_end, 'int'))
+
+        # Наконец, удаляем все с.ц., содержащие аутлаеры, из сигнала
+        for w_start, w_end, _ in outliers:
+            clean_ppg[w_start : w_end+1] = np.nan
+        clean_ppg = clean_ppg[~np.isnan(clean_ppg)]
+
+        if 'outliers' in self.vis:
+            plt.figure(figsize=[24, 12])
+            plt.plot(ppg)
+            plt.plot(peaks_pos, ppg[peaks_pos], 'go')
+            for w_start, w_end, w_reason in outliers:
+                reason_color = 'orangered' if w_reason == 'amp' else 'royalblue'
+                plt.axvspan(w_start, w_end, color=reason_color, alpha=0.4)
+            plt.text(0, ppg.max() * 0.9, fontsize=16,
+                     s=f'КРАСН — аном. амп., СИНИЙ — аном. инт.')
+            plt.text(0, ppg.max() * 0.8, fontsize=16,
+                     s=f'Длина до удаления аутлаеров: {len(ppg)}')
+            plt.text(0, ppg.max() * 0.7, fontsize=16,
+                     s=f'После удаления аутлаеров: {len(clean_ppg)} ({int((len(clean_ppg) - len(ppg)) / len(ppg) * 100)}%)')
+            plt.savefig('outliers.png')
+            plt.close() # <-- Брейкпоинт ставить сюда
+
+        return clean_ppg
+
 
 
     def process_data(self, ppg, fs, wsize, wstride, method='clear'):
@@ -274,6 +330,21 @@ class PreprocessPPG:
         :return results: Датафрейм `params`, содержащий, для каждого окна, некоторые параметры ВСР,
         усреднённые по окну IB- и RR-интервалы, LF, HF и их соотношение, а также значение RSA.
         """
+
+        # Если метод чистый, верим юзеру на слово -- иначе, мы применяем
+        # стандартный комплекс фильтрации шумов и удаления аутлайеров:
+        if method != 'clear':
+            ppg = filtering.butter_bandpass(ppg, fs, 0.5, 4.0, 4)
+            ppg += np.abs(ppg.min())
+            ppg /= np.median(ppg) # Если взять min(), то будет деление на 0!
+            # ppg = (ppg - np.median(ppg)) / np.std(ppg)
+
+            ppg_rp, ppg_rri, ppg_dp, ppg_ibi = self.find_rri_ibi(ppg, fs, method, 6)
+
+            # TODO: попробовать поподбирать более точные/чувствительные ограничения
+            ppg = self.remove_outliers(ppg, fs, ppg_dp, ppg_ibi, 3, 2) # <-- 3 сигмы амп., 2 сигмы инт.
+
+            ppg = filtering.savgol_filter(ppg, 15, 2)
 
         # Сперва находим расстояния для всего сигнала, поскольку окна
         # задаются и применяются от и до диастолических пиков (aka IBI).
@@ -350,10 +421,11 @@ class PreprocessPPG:
 # p = PreprocessPPG(vis=[
 #     'dists',
 #     'peaks',
-#     # 'hrv',
-#     # 'lhf_plt',
-#     # 'lhf_cwt',
+#     'hrv',
+#     # 'lhf_plot',
+#     # 'lhf_comp',
 #     # 'rsa',
+#     # 'outliers',
 #     'seg',
 #     # 'seg_i'
 # ])
@@ -379,8 +451,9 @@ class PreprocessPPG:
 #     'dists',
 #     'peaks',
 #     'hrv',
-#     'lhf_plt',
-#     'lhf_cwt',
+#     'lhf_plot',
+#     'lhf_comp',
+#     'outliers',
 #     'rsa',
 #     'seg',
 #     # 'seg_i'
@@ -390,29 +463,28 @@ class PreprocessPPG:
 # print(res) # ПКМ --> Открыть в первичном обработчике данных
 
 
-# # Пример использования на шумных данных с запястья
-# fs = 250
-# # fs = 240
-# fpath = __file__.split('/preprocess.py')[0] + '/examples/01_exp02_anxiety.csv'
-# df = pd.read_csv(fpath)
-# ppg = df["afe_LED1ABSVAL"].to_numpy()
-# ppg_filtered = filtering.butter_bandpass(ppg[2000:], fs, 0.5, 4.0, 4)
-# # ppg_filtered = filtering.butter_bandpass(ppg[2000:], fs, 4.0, 9.0, 3)
-# ppg_filtered += np.abs(ppg_filtered.min())
+# Пример использования на шумных данных с запястья
+fs = 250
+# fs = 240
+fpath = __file__.split('/preprocess.py')[0] + '/examples/01_exp02_anxiety.csv'
+df = pd.read_csv(fpath)
+ppg = df["afe_LED1ABSVAL"].to_numpy()
+ppg = ppg[500:]
 
-# p = PreprocessPPG(vis=[
-#     'dists',
-#     'peaks',
-#     'hrv',
-#     'lhf_plt',
-#     'lhf_cwt',
-#     # 'rsa',
-#     'seg',
-#     # 'seg_i'
-# ])
+p = PreprocessPPG(vis=[
+    # # 'dists',
+    'peaks',
+    # 'hrv',
+    # 'lhf_plot',
+    # 'lhf_comp',
+    # # 'rsa',
+    'outliers',
+    'seg',
+    # # 'seg_i'
+])
 
-# res = p.process_data(ppg_filtered, fs, 800, 1, 'noisy')
-# print(res) # ПКМ --> Открыть в первичном обработчике данных
+res = p.process_data(ppg, fs, 500, 1, 'noisy')
+print(res) # ПКМ --> Открыть в первичном обработчике данных
 
 
 __all__ = ["PreprocessPPG"]
