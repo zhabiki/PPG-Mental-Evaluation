@@ -117,8 +117,16 @@ class PreprocessPPG:
             wd, m = hp.process(np.array(ppg), sample_rate=fs)
 
             r_peaks = wd['peaklist']
-            # TODO: Найти, где HP находит диастолические пики, и добавить их сюда!!!
-            d_peaks = wd['peaklist']
+
+            # plt.plot(wd['breathing_signal'])
+            # plt.savefig('_sdfsdf.png')
+            # plt.close()
+
+            # Диастолические пики HeartPy вообще не определяет, но, зная
+            # расположения систолических пиков, находятся они элементарно:
+            d_peaks = [r_peaks[i] + np.argmin(ppg[r_peaks[i] : r_peaks[i+1]]) for i in range(len(r_peaks)-1)]
+            d_peaks = list(filter(lambda dp: ppg[dp] < np.min(ppg[r_peaks]), d_peaks))
+
 
         else:
             print('Неизвестный тип обработки! См. документацию к методу…')
@@ -271,9 +279,9 @@ class PreprocessPPG:
             np.abs(ppg[peaks_pos] - amp_median) > (amp_mad * sigma_amp)
         )[0]
 
-        for idx in amp_outliers:
-            w_start = peaks_pos[idx-1] if idx > 0 else 0
-            w_end = peaks_pos[idx+1] if idx < len(peaks_pos)-1 else len(ppg)-1
+        for pos in amp_outliers:
+            w_start = peaks_pos[pos-1] if pos > 0 else 0
+            w_end = peaks_pos[pos+1] if pos < len(peaks_pos)-1 else len(ppg)-1
             outliers.add((w_start, w_end, 'amp'))
 
         # Аналогично поступаем для нахождения аномальных интервалов
@@ -284,9 +292,9 @@ class PreprocessPPG:
             np.abs(peaks_int - int_median) > (int_mad * sigma_int)
         )[0]
 
-        for idx in int_outliers:
-            w_start = peaks_pos[idx-1] if idx > 0 else 0
-            w_end = peaks_pos[idx+1] if idx < len(peaks_pos)-1 else len(ppg)-1
+        for pos in int_outliers:
+            w_start = peaks_pos[pos-1] if pos > 0 else 0
+            w_end = peaks_pos[pos+1] if pos < len(peaks_pos)-1 else len(ppg)-1
             outliers.add((w_start, w_end, 'int'))
 
         # Наконец, удаляем все с.ц., содержащие аутлаеры, из сигнала
@@ -340,9 +348,7 @@ class PreprocessPPG:
             # ppg = (ppg - np.median(ppg)) / np.std(ppg)
 
             ppg_rp, ppg_rri, ppg_dp, ppg_ibi = self.find_rri_ibi(ppg, fs, method, 6)
-
-            # TODO: попробовать поподбирать более точные/чувствительные ограничения
-            ppg = self.remove_outliers(ppg, fs, ppg_dp, ppg_ibi, 3, 2) # <-- 3 сигмы амп., 2 сигмы инт.
+            ppg = self.remove_outliers(ppg, fs, ppg_dp, ppg_ibi, 4, 2) # <-- 3 сигмы амп., 2 сигмы инт.
 
             ppg = filtering.savgol_filter(ppg, 15, 2)
 
@@ -377,10 +383,8 @@ class PreprocessPPG:
             seg_params = {
                 'bpm': seg_hrv['bpm'],
                 'sdnn': seg_hrv['sdnn'],
-                'sdsd': seg_hrv['sdsd'],
                 'rmssd': seg_hrv['rmssd'],
                 'hr_mad': seg_hrv['hr_mad'],
-                'sd1/sd2': seg_hrv['sd1/sd2'],
                 'rri_mean': np.mean(seg_rri, axis=0),
                 'ibi_mean': np.mean(seg_ibi, axis=0),
                 'lf': seg_lf_hf['lf'],
@@ -472,15 +476,15 @@ ppg = df["afe_LED1ABSVAL"].to_numpy()
 ppg = ppg[500:]
 
 p = PreprocessPPG(vis=[
-    # # 'dists',
+    # 'dists',
     'peaks',
     # 'hrv',
-    # 'lhf_plot',
-    # 'lhf_comp',
-    # # 'rsa',
+    'lhf_plot',
+    'lhf_comp',
+    # 'rsa',
     'outliers',
     'seg',
-    # # 'seg_i'
+    # 'seg_i'
 ])
 
 res = p.process_data(ppg, fs, 500, 1, 'noisy')
