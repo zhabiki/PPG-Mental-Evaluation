@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.signal import butter, filtfilt, stft, detrend
+from scipy.signal import butter, filtfilt, stft, detrend, savgol_filter
 import pywt
 
 
@@ -44,7 +44,7 @@ class Filtering:
         return cleaned_signal[:len(signal)] # Выравниваем по изначальной длине
 
 
-    def wavelet_cwt_hlf(self, signal, fs, wavelet, pph=300, f_min=0.01, f_max=1.00):
+    def hlf_wavelet_cwt(self, signal, fs, wavelet, pph=300, f_min=0.01, f_max=1.00):
         """
         Вычисление LF и HF на основе вейвлет-преобразования данного сигнала с указанным вейвлетом.
         """
@@ -91,7 +91,7 @@ class Filtering:
         }
 
 
-    def fft_cwt_hlf(self, signal, fs):
+    def hlf_fft_cwt(self, signal, fs):
         """
         Вычисление LF и HF на основе комплексного преобразования Фурье данного сигнала.
         """
@@ -119,6 +119,10 @@ class Filtering:
             'hf': [hf_max_ampl, hf_max_freq],
             'data': [signal_ampls, signal_freqs]
         }
+
+
+    def savgol_filter(self, signal, window_length=15, polyorder=2):
+        return savgol_filter(signal, window_length, polyorder)
 
 
 __all__ = ["Filtering"]
