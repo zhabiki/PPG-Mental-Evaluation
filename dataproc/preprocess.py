@@ -117,15 +117,21 @@ class PreprocessPPG:
             wd, m = hp.process(np.array(ppg), sample_rate=fs)
 
             r_peaks = wd['peaklist']
+            d_peaks = wd['peaklist']
 
-            # plt.plot(wd['breathing_signal'])
-            # plt.savefig('_sdfsdf.png')
-            # plt.close()
+            plt.plot(wd['breathing_signal'])
+            plt.savefig('_sdfsdf.png')
+            plt.close()
 
             # Диастолические пики HeartPy вообще не определяет, но, зная
             # расположения систолических пиков, находятся они элементарно:
             d_peaks = [r_peaks[i] + np.argmin(ppg[r_peaks[i] : r_peaks[i+1]]) for i in range(len(r_peaks)-1)]
             d_peaks = list(filter(lambda dp: ppg[dp] < np.min(ppg[r_peaks]), d_peaks))
+
+            # И наконец, мы можем помочь HP перестать срать себе в штаны,
+            # удалив дублирующиеся пики, которых, как оказалось, дофига...
+            r_peaks = [d_peaks[i] + np.argmax(ppg[d_peaks[i] : d_peaks[i+1]]) for i in range(len(d_peaks)-1)]
+            r_peaks = list(filter(lambda rp: ppg[rp] > np.max(ppg[d_peaks]), r_peaks))
 
 
         else:
@@ -159,7 +165,7 @@ class PreprocessPPG:
         return m
 
 
-    def find_lf_hf(self, rri, interp_fs=4.0, detrend_l=(4,5,6), approx_lr=slice(3,5), pph=300):
+    def find_lf_hf(self, rri, interp_fs=4.0, detrend_l=(4,5,6), approx_lr=slice(3,5)):
         """
         Вычисление параметров LF, HF и их соотношения.\n
         Развёрнутое объяснение алгоритма см. в "PPG-Datasets-Exploration/Анализ_данных_new.ipynb"
@@ -348,7 +354,7 @@ class PreprocessPPG:
             # ppg = (ppg - np.median(ppg)) / np.std(ppg)
 
             ppg_rp, ppg_rri, ppg_dp, ppg_ibi = self.find_rri_ibi(ppg, fs, method, 6)
-            ppg = self.remove_outliers(ppg, fs, ppg_dp, ppg_ibi, 4, 2) # <-- 3 сигмы амп., 2 сигмы инт.
+            ppg = self.remove_outliers(ppg, fs, ppg_rp, ppg_rri, 3, 4) # <-- 3 сигмы амп., 4 сигмы инт.
 
             ppg = filtering.savgol_filter(ppg, 15, 2)
 
@@ -479,15 +485,15 @@ p = PreprocessPPG(vis=[
     # 'dists',
     'peaks',
     # 'hrv',
-    'lhf_plot',
-    'lhf_comp',
+    # 'lhf_plot',
+    # 'lhf_comp',
     # 'rsa',
     'outliers',
     'seg',
     # 'seg_i'
 ])
 
-res = p.process_data(ppg, fs, 500, 1, 'noisy')
+res = p.process_data(ppg, fs, 375, 1, 'noisy')
 print(res) # ПКМ --> Открыть в первичном обработчике данных
 
 
