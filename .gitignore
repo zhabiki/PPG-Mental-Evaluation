@@ -3,4 +3,11 @@ __pycache__/
 *.pyc
 
 # Отладочные артефакты препроцессора
-vis/*
+dists.png
+peaks.png
+outliers.png
+hrv.png
+lhf_plot.png
+lhf_comp.png
+rsa.png
+seg*.png
