@@ -75,7 +75,7 @@ class PreprocessPPG:
                 plt.plot(ppg_cycle)
                 for m in [systolic_main, systolic_refl, dichrotic]:
                     plt.plot(m, ppg_cycle[m], 'ro')
-                plt.savefig('vis/dists.png')
+                plt.savefig('dists.png')
                 plt.close() # <-- Брейкпоинт ставить сюда
 
             systolic.append(diastolic[i] + systolic_main)
@@ -145,7 +145,7 @@ class PreprocessPPG:
             plt.plot(r_peaks, ppg[r_peaks], 'ro')
             plt.plot(d_peaks, ppg[d_peaks], 'go')
             plt.xlim(0, fs * 100)
-            plt.savefig('vis/peaks.png')
+            plt.savefig('peaks.png')
             plt.close() # <-- Брейкпоинт ставить сюда
 
         rri = np.diff(np.asarray(r_peaks) / fs)
@@ -161,7 +161,7 @@ class PreprocessPPG:
             if 'hrv' in self.vis:
                 hp.plotter(wd, m)
                 # plt.xlim(0, (wd['hr'].shape[0] / wd['sample_rate']) / 10)
-                plt.savefig('vis/hrv.png')
+                plt.savefig('hrv.png')
                 plt.close() # <-- Брейкпоинт ставить сюда
 
             return m
@@ -233,7 +233,7 @@ class PreprocessPPG:
             plt.plot(interp_times[int(interp_fs*5):int(interp_fs*60*5)],
                      bias_mean + interp_rri_approx[int(interp_fs*5):int(interp_fs*60*5)])
             plt.tight_layout()
-            plt.savefig('vis/lhf_plot.png')
+            plt.savefig('lhf_plot.png')
             plt.close()
 
         # Наконец, для сигнала выполняем комплексное преобразование Фурье
@@ -255,7 +255,7 @@ class PreprocessPPG:
                      f'Макс. HF: {cwt_res["hf"][0]} @ {cwt_res["hf"][1]} Гц', c='tomato')
             plt.xlabel("Частота")
             plt.ylabel("Амплитуда")
-            plt.savefig('vis/lhf_comp.png')
+            plt.savefig('lhf_comp.png')
             plt.close()
 
         return {
@@ -327,7 +327,7 @@ class PreprocessPPG:
                      s=f'Длина до удаления аутлаеров: {len(ppg)}')
             plt.text(0, ppg.max() * 0.7, fontsize=16,
                      s=f'После удаления аутлаеров: {len(clean_ppg)} ({int((len(clean_ppg) - len(ppg)) / len(ppg) * 100)}%)')
-            plt.savefig('vis/outliers.png')
+            plt.savefig('outliers.png')
             plt.close() # <-- Брейкпоинт ставить сюда
 
         return clean_ppg
@@ -335,16 +335,22 @@ class PreprocessPPG:
 
     def process_data(self, ppg, fs, wsize, wstride, method='clear', mode='cycles'):
         """
-        Полная обработка данных ФПГ с использованием скользящего по пикам(!) окна.
+        Полная обработка данных ФПГ с использованием скользящего окна.
 
         :param ppg: Временнóе представление данных ФПГ (алгоритм не выполняет никакой фильтрации
         сигнала самостоятельно, поэтому желательно предварительно сделать это самостоятельно).
 
         :param fs: Частота дискретизации данных ФПГ.
 
-        :param wsize: Размер окна — задаётся в количестве сердечных циклов от впадины до впадины.
+        :param wsize: Размер окна.
 
-        :param wstride: Шаг окна — задаётся в количестве сердечных циклов от впадины до впадины.
+        :param wstride: Шаг окна.
+
+        :param mode: Режим задания размера и шага окна — `'cycles'` для задания в кол-ве сердечных
+        циклов от впадины до впадины (IBI), либо `'time'` — в числе записей (* fs для задания в сек).
+
+        :param method: Метод обработки сигнала — 'clear' (данные не требуют доп. обработки), либо
+        `'noisy'` (данные требуют доп. фильтрации, удаления шумных амплитуд и аномальных интервалов).
 
         :return results: Датафрейм `params`, содержащий, для каждого окна, некоторые параметры ВСР,
         усреднённые по окну IB- и RR-интервалы, LF, HF и их соотношение, а также значение RSA.
@@ -363,8 +369,8 @@ class PreprocessPPG:
 
             ppg = filtering.savgol_filter(ppg, 15, 2)
 
-        params = pd.DataFrame(columns=[])
 
+        params = pd.DataFrame(columns=[])
 
         # Сперва находим расстояния для всего сигнала, поскольку окна
         # задаются и применяются от и до диастолических пиков (aka IBI).
@@ -372,44 +378,46 @@ class PreprocessPPG:
         # Если брать по систолическим (RRI) ничего особо не изменится.
         ppg_rp, ppg_rri, ppg_dp, ppg_ibi = self.find_rri_ibi(ppg, fs, method, 4)
 
+        # Теперь проходим по сигналу скользящим по началам всех с.ц.
+        # окном размером в wsize с.ц. с зазором в wstride с.ц. --
+        # Либо, в случае с режимом задания по времени, просто проходим
+        # заданным в числе записей отрезом, без учёта с.ц. и прочего:
+        wrange = (len(ppg_dp) - wsize) if mode == 'cycles' else (len(ppg) - wsize - 1)
 
-        if mode == 'cycles':
-            # Теперь проходим по сигналу скользящим по началам сердечных
-            # циклов окном размером в wsize с.ц. с зазором в wstride с.ц.:
-            for i in range(0, len(ppg_dp) - wsize, wstride):
-                seg = ppg[ppg_dp[i] : ppg_dp[i+wsize]]
-                print(f'Окно №{i}: {ppg_dp[i]}—{ppg_dp[i+wsize]} (≈ {int((ppg_dp[i+wsize] - ppg_dp[i]) / fs)} сек.)')
-                print(f'Размер окна: {len(seg)}, Размер шага: {ppg_dp[i] - ppg_dp[i-1]}')
+        for t in range(0, wrange, wstride):
+            if mode == 'cycles':
+                seg = ppg[ppg_dp[t] : ppg_dp[t+wsize]]
+                seg_rri = ppg_rri[t : t+wsize]
+                seg_ibi = ppg_ibi[t : t+wsize]
+                print(f'Окно №{t}: {ppg_dp[t]}—{ppg_dp[t+wsize]} (≈ {int((ppg_dp[t+wsize] - ppg_dp[t]) / fs)} сек.)')
+                print(f'Размер окна: {len(seg)}, Размер шага: {ppg_dp[t] - ppg_dp[t-1]}')
 
-
-        elif mode == 'time':
-            # Либо, в случае с режимом задания по времени, просто проходим
-            # заданным в числе записей отрезом, без учёта с.ц. и прочего:
-            for t in range(0, len(ppg) - wsize, wstride):
+            elif mode == 'time':
                 seg = ppg[t : t+wsize]
-                print(f'Отрезок на {t/fs} сек.: {t}—{t+wsize}, {(wsize / fs)} сек.)')
+                _, seg_rri, _, seg_ibi = self.find_rri_ibi(seg, fs, method, 4)
+                print(f'Отрезок на {t/fs} сек.: {t}—{t+wsize}, {wsize / fs} сек.')
                 print(f'Размер окна: {len(seg)}, Размер шага: {wstride}')
 
+            else:
+                print(f'Режима задания окна "{mode}" не существует!')
+                exit(1)
 
-        else:
-            print(f'Режима задания окна "{mode}" не существует!')
-            exit(1)
 
+            seg_hrv = self.find_hrv(seg, fs)
 
-        seg_hrv = self.find_hrv(seg, fs)
+            # Иногда HeartPy может быкануть и не захотеть находить ВСР,
+            # в таком случае просто пропускаем сегмент и ехаем дальше
+            if seg_hrv is None:
+                print('Окно пропущено, т.к. не удалось найти ВСР!')
+                continue
 
-        # Иногда HeartPy может быкануть и не захотеть находить ВСР,
-        # в таком случае просто пропускаем сегмент и ехаем дальше
-        if seg_hrv:
-            seg_rri = ppg_rri[i : i+wsize]
-            seg_ibi = ppg_ibi[i : i+wsize]
 
             # Для корректного определения LF нужна длина минимум 25 сек,
             # на окнах меньшего размера результат не будет иметь смысла;
             # конечно, желательно, чтобы длина была хотя бы 5 минут, но
             # 25 сек -- это прям самый минимум, т.к. 1/0.04 = 25.
             if (
-                (((mode == 'cycles') and (ppg_dp[i+wsize] - ppg_dp[i]) / fs) >= 25.0)
+                (((mode == 'cycles') and (ppg_dp[t+wsize] - ppg_dp[t]) / fs) >= 25.0)
                 or ((mode == 'time') and (wsize/fs) >= 25.0)
             ):
                 seg_lf_hf = self.find_lf_hf(seg_rri)
@@ -441,9 +449,9 @@ class PreprocessPPG:
                         horizontalalignment='left', verticalalignment='bottom')
                 plt.tight_layout()
                 if 'seg_i' in self.vis:
-                    plt.savefig(f'vis/seg_{i}.png')
+                    plt.savefig(f'seg_{t}.png')
                 else:
-                    plt.savefig('vis/seg.png')
+                    plt.savefig('seg.png')
                 plt.close() # <-- Брейкпоинт ставить сюда
 
             # Добавляем запись в DataFrame
@@ -466,43 +474,40 @@ class PreprocessPPG:
 #     'hrv',
 #     # 'lhf_plot',
 #     # 'lhf_comp',
-#     # 'rsa',
 #     # 'outliers',
 #     'seg',
 #     # 'seg_i'
 # ])
 
-# res1 = p.process_data(ppg_filtered, fs, 440, 1)  # Самый распростраённый случай
+# res1 = p.process_data(ppg_filtered, fs, 440, 1)  # Самый распространённый случай
 # res2 = p.process_data(ppg_filtered, fs, 44, 1)   # Окно маленького размера
 # res3 = p.process_data(ppg_filtered, fs, 220, 22) # Большое окно с шагом в 10%
 # res4 = p.process_data(ppg_filtered, fs, 4, 4)    # Мелкое окно с шагом в 100%
-
-# for res in [res1, res2, res3, res4]:
-#     print(res, '\n') # ПКМ --> Открыть в первичном обработчике данных
+# res5 = p.process_data(ppg_filtered, fs, fs*10, 1, mode='time') # Окно по записям
 
 
-# Пример использования на чистых данных с пальца
-fs = 120
-ppg = []
-fpath = __file__.split('/preprocess.py')[0] + '/examples/250409-Н-315-120.txt'
-with open(fpath, 'r') as f:
-    for line in f:
-        ppg.append(float(line.strip()))
+# # Пример использования на чистых данных с пальца
+# fs = 120
+# ppg = []
+# fpath = __file__.split('/preprocess.py')[0] + '/examples/250409-Н-315-120.txt'
+# with open(fpath, 'r') as f:
+#     for line in f:
+#         ppg.append(float(line.strip()))
 
-ppg_filtered = filtering.butter_bandpass(ppg, fs)
-p = PreprocessPPG(vis=[
-    'dists',
-    'peaks',
-    'lhf_plot',
-    'lhf_comp',
-    'outliers',
-    'rsa',
-    'seg',
-    # 'seg_i'
-])
+# ppg_filtered = filtering.butter_bandpass(ppg, fs)
+# p = PreprocessPPG(vis=[
+#     'dists',
+#     'peaks',
+#     'hrv',
+#     'lhf_plot',
+#     'lhf_comp',
+#     'outliers',
+#     'seg',
+#     # 'seg_i'
+# ])
 
-res = p.process_data(ppg_filtered, fs, 240, 1, 'clear')
-print(res) # ПКМ --> Открыть в первичном обработчике данных
+# res = p.process_data(ppg_filtered, fs, 240, 1, 'clear')
+# print(res) # ПКМ --> Открыть в первичном обработчике данных
 
 
 # # Пример использования на шумных данных с запястья
@@ -516,17 +521,18 @@ print(res) # ПКМ --> Открыть в первичном обработчи�
 # p = PreprocessPPG(vis=[
 #     # 'dists',
 #     # 'peaks',
-#     # 'hrv',
+#     'hrv',
 #     # 'lhf_plot',
 #     # 'lhf_comp',
-#     # 'rsa',
 #     # 'outliers',
-#     # 'seg',
+#     'seg',
 #     # 'seg_i'
 # ])
 
-# res = p.process_data(ppg, fs, 375, 1, 'noisy')
-# print(res) # ПКМ --> Открыть в первичном обработчике данных
+# # res_h = p.process_data(ppg, fs, 375, 1, 'noisy', 'cycles') # По сердечным циклам
+# res_t = p.process_data(ppg, fs, 25*fs, 5*fs, 'noisy', 'time') # По числу записей
+# for r in [res_t]:
+#     print(r, '\n') # ПКМ --> Открыть в первичном обработчике данных
 
 
 __all__ = ["PreprocessPPG"]
