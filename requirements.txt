@@ -1,10 +1,12 @@
 # Сгенерировано через модуль "pipreqs"
 
+fastapi==0.115.12
 heartpy==1.2.7
+joblib==1.4.2
 matplotlib==3.10.3
 numpy==2.2.5
 pandas==2.2.3
+pywavelets==2.2.5
 scikit_learn==1.6.1
 scipy==1.15.3
 xgboost==3.0.1
-pywavelets==2.2.5
