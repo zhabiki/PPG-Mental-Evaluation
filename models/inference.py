@@ -9,12 +9,12 @@ class Inference:
         self.ensemble = joblib.load('saves/checkpoint.joblib')
         self.ensemble.set_mode('test')
 
-    def predict(self, parameters):
+    def predict(self, parameters: np.ndarray):
         """Вычисляем вероятности"""
         probas = self.ensemble.forward(parameters, probas=True)
         return probas
 
-def main(parameters):
+def main(parameters: np.ndarray):
     """Инференс модели"""
     inference = Inference()
 
