@@ -1,12 +1,14 @@
 import numpy as np
 import os
 import joblib
-from model import PsychiatryDiseasesClassifier
+
+from .model import PsychiatryDiseasesClassifier
+
 
 class Inference:
-    def __init__(self):
+    def __init__(self, name):
         """Импортируем модель и переводим её в тестовый режим"""
-        self.ensemble = joblib.load('saves/checkpoint.joblib')
+        self.ensemble = joblib.load(name)
         self.ensemble.set_mode('test')
 
     def predict(self, parameters: np.ndarray):
@@ -14,9 +16,11 @@ class Inference:
         probas = self.ensemble.forward(parameters, probas=True)
         return probas
 
-def main(parameters: np.ndarray):
-    """Инференс модели"""
-    inference = Inference()
 
-    probas = inference.predict(parameters)
-    return probas
+# # Пример инференса модели
+# inference = Inference('saves/checkpoint.joblib')
+# parameters = None # <-- Многомерный массив (sdnn, lf/hf...)
+# probas = inference.predict(parameters)
+
+
+__all__ = ["Inference"]

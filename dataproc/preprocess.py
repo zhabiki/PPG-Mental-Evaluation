@@ -6,7 +6,7 @@ import heartpy as hp
 from scipy.interpolate import interp1d
 from scipy.signal import find_peaks, savgol_filter
 
-from filtering import Filtering
+from .filtering import Filtering
 filtering = Filtering()
 
 
