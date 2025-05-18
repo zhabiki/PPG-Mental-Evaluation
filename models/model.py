@@ -120,3 +120,6 @@ class PsychiatryDiseasesClassifier:
         assert mode in ['train', 'test']
 
         self.mode = mode
+
+
+__all__ = ["PsychiatryDiseasesClassifier"]
