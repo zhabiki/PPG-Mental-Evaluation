@@ -1,14 +1,14 @@
 import numpy as np
 import os
-import joblib
 
 from .model import PsychiatryDiseasesClassifier
 
-
 class Inference:
-    def __init__(self, path: str):
+    def __init__(self, names, disorders):
         """Импортируем модель и переводим её в тестовый режим"""
-        self.ensemble = joblib.load(path)
+        self.ensemble = PsychiatryDiseasesClassifier(disorders)
+        for d,n in zip(disorders,names):
+            self.ensemble.models[d].load_model(n,format='json')
         self.ensemble.set_mode('test')
 
     def predict(self, parameters: np.ndarray):

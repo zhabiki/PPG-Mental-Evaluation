@@ -9,14 +9,14 @@ import xgboost
 import sklearn
 import numpy as np
 import matplotlib.pyplot as plt
-
+import catboost
 
 class PsychiatryDiseasesClassifier:
     def __init__(self, diseases: list, *args, **kwargs):
         """Инициализация модели
         diseases - болезни, которые будет классифицировать модель"""
 
-        self.models = {d: sklearn.ensemble.GradientBoostingClassifier() for d in diseases}
+        self.models = {d: catboost.CatBoostClassifier() for d in diseases}
 
         #Устанавливаем режим тренировки, ибо модель перед исполльзованием надо натренировать
         self.mode = 'train'
