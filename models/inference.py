@@ -6,9 +6,9 @@ from .model import PsychiatryDiseasesClassifier
 
 
 class Inference:
-    def __init__(self, name):
+    def __init__(self, path: str):
         """Импортируем модель и переводим её в тестовый режим"""
-        self.ensemble = joblib.load(name)
+        self.ensemble = joblib.load(path)
         self.ensemble.set_mode('test')
 
     def predict(self, parameters: np.ndarray):
