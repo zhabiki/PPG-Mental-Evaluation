@@ -141,9 +141,9 @@ class MyCatBoostModel:
     def load_weights(self, path):
         for d in self.models.keys():
             model = CatBoostClassifier(**self.a)
-            model.load_model(path)
+            model.load_model(f'{str(path) + "__" + str(d) + ".cbm"}')
             self.models[d] = model
-            print(f'Веса для {d} загружены из "{path}"')
+            print(f'Веса для {d} загружены из "{str(path) + "__" + str(d) + ".cbm"}"')
 
 
     def set_mode(self, mode):
