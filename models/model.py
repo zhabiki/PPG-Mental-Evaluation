@@ -11,7 +11,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 class PsychiatryDiseasesClassifier:
-    def __init__(self, diseases, *args, **kwargs):
+    def __init__(self, diseases: list, *args, **kwargs):
         """Инициализация модели
         diseases - болезни, которые будет классифицировать модель"""
 
@@ -20,7 +20,7 @@ class PsychiatryDiseasesClassifier:
         #Устанавливаем режим тренировки, ибо модель перед исполльзованием надо натренировать
         self.mode = 'train'
 
-    def probas_mode(self, probas, diseases):
+    def probas_mode(self, probas: bool, diseases: bool):
         """Проверка необходимости вернуть вероятности и отсутствие в таком
         случае списка заболеваний"""
         if probas and type(diseases) != type(None):
@@ -112,7 +112,7 @@ class PsychiatryDiseasesClassifier:
                 plt.savefig(f'method_results/{d}_weights.png')
                 plt.close()
 
-    def set_mode(self, mode):
+    def set_mode(self, mode: str):
         """Устанавливает режим работы модели
         mode - соответственно, режим. Может быть только train или test
         Во всех иных случаях метод выдаёт ошибку"""
